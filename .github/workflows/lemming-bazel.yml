@@ -1,0 +1,65 @@
+name: Lemming Bazel
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  config:
+    name: Lemming config (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: AMD64
+            runner: ubuntu-24.04
+            machine: x86_64
+            bazel_sha256: 3453736dc067a9b923f3066aad378282cd864830d9ad135a45ac9c1ebc47bbae
+          - arch: ARM64
+            runner: ubuntu-24.04-arm
+            machine: aarch64
+            bazel_sha256: 3f33cf243fb0500993443d896b41ce08659c23f2a65bd2bbd4314801588f6b2f
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      EXPECTED_MACHINE: ${{ matrix.machine }}
+      BAZEL_SHA256: ${{ matrix.bazel_sha256 }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Install the declared Bazel version
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          machine="$EXPECTED_MACHINE"
+          if [ "$machine" = aarch64 ]; then machine=arm64; fi
+          mkdir -p "$RUNNER_TEMP/lemming-tools"
+          curl --fail --location --retry 3 \
+            "https://releases.bazel.build/8.4.1/release/bazel-8.4.1-linux-$machine" \
+            --output "$RUNNER_TEMP/lemming-tools/bazel"
+          printf '%s  %s\n' "$BAZEL_SHA256" "$RUNNER_TEMP/lemming-tools/bazel" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/lemming-tools/bazel"
+          echo "$RUNNER_TEMP/lemming-tools" >> "$GITHUB_PATH"
+
+      - name: Check the module ZIP lock and compile the real config test
+        shell: bash
+        run: ci/lemming-bazel.sh
+
+      - name: Retain source, resolution, and test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lemming-bazel-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/lemming-evidence/
+          if-no-files-found: error
+          retention-days: 14
